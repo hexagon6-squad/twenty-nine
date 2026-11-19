@@ -393,16 +393,35 @@ function songForm(){
 }
 
 /* ================= actions ================= */
-function itunes(q){
+function jsonp(url, ms=6000){
   return new Promise((res,rej)=>{
-    const cb = "it"+Date.now(), s = document.createElement("script");
-    const t = setTimeout(()=>{ cleanup(); rej(new Error("timeout")); }, 8000);
+    const cb = "cb"+Date.now()+Math.floor(Math.random()*1e6), s = document.createElement("script");
+    const t = setTimeout(()=>{ cleanup(); rej(new Error("timeout")); }, ms);
     function cleanup(){ clearTimeout(t); delete window[cb]; s.remove(); }
-    window[cb] = d => { cleanup(); res(d.results||[]); };
+    window[cb] = d => { cleanup(); res(d); };
     s.onerror = () => { cleanup(); rej(new Error("load")); };
-    s.src = `https://itunes.apple.com/search?term=${encodeURIComponent(q)}&media=music&entity=song&limit=8&country=us&callback=${cb}`;
+    s.src = url + (url.includes("?")?"&":"?") + "callback=" + cb;
     document.body.appendChild(s);
   });
+}
+const mapApple = x => ({ type:"song", title:x.trackName, artist:x.artistName,
+  art:(x.artworkUrl100||"").replace("100x100","300x300"), preview:x.previewUrl||"", url:x.trackViewUrl||"" });
+// iPhones sometimes block one method, so try several: Apple fetch, Apple JSONP, then Deezer as a backup catalog.
+async function searchSongs(q){
+  const term = encodeURIComponent(q);
+  const apple = `https://itunes.apple.com/search?term=${term}&media=music&entity=song&limit=8&country=us`;
+  try{
+    const r = await fetch(apple, { mode:"cors" });
+    if(r.ok){ const d = await r.json(); if(d.results && d.results.length) return d.results.map(mapApple); }
+  }catch(e){}
+  try{
+    const d = await jsonp(apple);
+    if(d.results && d.results.length) return d.results.map(mapApple);
+  }catch(e){}
+  const d = await jsonp(`https://api.deezer.com/search?q=${term}&limit=8&output=jsonp`);
+  return (d.data||[]).map(x=>({ type:"song", title:x.title, artist:x.artist?.name||"",
+    art:x.album?.cover_medium||"", preview:x.preview||"",
+    url:`https://music.apple.com/us/search?term=${encodeURIComponent(x.title+" "+(x.artist?.name||""))}` }));
 }
 let audio = null;
 function wire(){
@@ -440,9 +459,7 @@ async function act(a){
     const q = $("#songQ").value.trim(); if(!q) return;
     ui.lastQ = q; ui.searching = true; render();
     try{
-      const r = await itunes(q);
-      ui.songResults = r.map(x=>({ type:"song", title:x.trackName, artist:x.artistName,
-        art:(x.artworkUrl100||"").replace("100x100","300x300"), preview:x.previewUrl||"", url:x.trackViewUrl||"" }));
+      ui.songResults = await searchSongs(q);
     }catch(e){ ui.songResults = []; ui.manualSong = true; }
     ui.searching = false; render();
   }
