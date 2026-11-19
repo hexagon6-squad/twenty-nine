@@ -34,11 +34,11 @@ const ROUNDS = [
   { prompt: "Pick a GIF to tell Madi happy birthday", type: "gif" },
   { prompt: "Give Madi a new middle name: Madi ____ Barros", type: "text", max: 30, format: "Madi {} Barros", placeholder: "New middle name" },
   { prompt: "First to give Madi a high five wins! 🖐️", type: "challenge" },
-  { prompt: "What's Madi's secret superpower?", type: "text", max: 90 },
+  { prompt: "Choose a superpower Madi would like to have", type: "text", max: 90 },
   { prompt: "Spin the wheel! Whoever it lands on takes a shot with Madi 🥃", type: "wheel" },
   { prompt: "Guess Madi's secret number from 1 to 100! Closest wins", type: "number", winMove: 10, exactBonus: 5 },
-  { prompt: "Race Madi to Taco Bell! 🌮 Beat her for +3 bonus", type: "race", bonus: 3 },
-  { prompt: "Final round: a one-sentence birthday toast to Madi", type: "text", max: 160 }
+  { prompt: "Pick a GIF for this quote: \"Ain't she pretty\"", type: "gif", query: "aint she pretty" },
+  { prompt: "Final round: race Madi to Taco Bell! 🌮 Beat her for +3 bonus", type: "race", bonus: 3 }
 ];
 
 const WIN_MOVE = 5;   // Madi's favorite moves this many spaces
@@ -53,6 +53,7 @@ const SPECIALS = {
   3:  { icon: "🥂", label: "Mimosa refill", move: 2 },
   6:  { icon: "🤕", label: "Hangover day", move: -1 },
   9:  { icon: "⚽", label: "Timbers win!", move: 3 },
+  11: { icon: "🍙", label: "You found a Spam musubi shop", move: 2 },
   12: { icon: "😱", label: "Watched a scary movie too close to bedtime", move: -2 },
   15: { icon: "🍸", label: "Dirty Martini boost", move: 2 },
   18: { icon: "✈️", label: "The FAA grounded you. Stuck 2 days in Cleveland", move: -2 },
@@ -264,7 +265,7 @@ function standings(B){
   return racers().map(([id])=>id).sort((a,b)=> (B.pos[b]-B.pos[a]) || (B.wins[b]-B.wins[a]));
 }
 const tileOf = p => p % LAP;
-const lapTag = (B,id) => B.laps[id] ? ` · 👑${B.laps[id]>1?"×"+B.laps[id]:""}` : "";
+const lapTag = (B,id) => B.laps[id] ? ` · 🏁${B.laps[id]>1?"×"+B.laps[id]:""}` : "";
 
 /* ================= board render + animation ================= */
 function tileCoord(i){ // 9 cols x 8 rows perimeter, 30 tiles, Start bottom-left, clockwise to the right
@@ -393,7 +394,7 @@ function phaseView(m, B, isJudge){
   const nIn = Object.keys(answersFor(m.round)).length, nTotal = racers().length;
   if(m.phase==="lobby"){
     return `<div class="card center"><h2>You're in!</h2><p>${Object.keys(players()).length} player(s) here. Waiting for the host to start.</p>
-      <p class="muted">${ROUNDS.length} rounds. Madi picks her favorite answer each round. Her pick moves <b>+${WIN_MOVE}</b>, everyone else who answers moves <b>+${PLAY_MOVE}</b>. Cross the 👑 and keep going for another lap. Furthest after all ${ROUNDS.length} rounds wins!</p></div>`;
+      <p class="muted">${ROUNDS.length} rounds. Madi picks her favorite answer each round. Her pick moves <b>+${WIN_MOVE}</b>, everyone else who answers moves <b>+${PLAY_MOVE}</b>. Cross the finish line and keep going for another lap. Furthest after all ${ROUNDS.length} rounds wins!</p></div>`;
   }
   if(m.phase==="submit"){
     if(R.type==="wheel") return wheelView(m, isJudge);
@@ -447,7 +448,7 @@ function phaseView(m, B, isJudge){
         <h2>${ws.length ? `${ws.map(nameOf).map(esc).join(" & ")} beat Madi! +${RR.bonus||3} bonus` : "Nobody beat Madi! 👑"}</h2>
         <p class="muted">${ws.length?`Winners move +${RR.winMove||WIN_MOVE}, e`:"E"}veryone else moves +${PLAY_MOVE}.</p>
         ${ev.length?`<div class="events">${ev.map(e=>`${e.sp.icon} ${esc(nameOf(e.id))} hit <b>${esc(e.sp.label)}</b> (${e.sp.move>0?"+":""}${e.sp.move})`).join("<br>")}</div>`:""}
-        ${(B.lapEvents[m.round]||[]).length?`<p class="display" style="font-size:22px;margin-top:10px">👑 ${(B.lapEvents[m.round]).map(nameOf).map(esc).join(" & ")} crossed the crown! Another lap!</p>`:""}</div>
+        ${(B.lapEvents[m.round]||[]).length?`<p class="display" style="font-size:22px;margin-top:10px">👑 ${(B.lapEvents[m.round]).map(nameOf).map(esc).join(" & ")} crossed the finish line! Another lap!</p>`:""}</div>
         <div class="card"><h3>Race results</h3>${rows.map(([id,a],i)=>`<div class="chip" style="margin:6px 0;width:100%;padding:8px 12px;border-radius:12px;font-size:16px;${id===j?"background:#ffe9e9":ws.includes(id)?"background:#fff3c4":""}">
           ${i===0?"🥇":i===1?"🥈":i===2?"🥉":(i+1)+"."} ${id===j?"👑 ":""}${esc(nameOf(id))}<span style="margin-left:auto">${fmt(a)}</span></div>`).join("")}</div>`;
     }
@@ -457,7 +458,7 @@ function phaseView(m, B, isJudge){
       return `<div class="card center"><p class="muted" style="margin:0">Madi's secret number was</p><div class="display" style="font-size:64px;color:var(--red)">${esc(secret)}</div>
         <h2>${ws.map(nameOf).map(esc).join(" & ")} ${ws.length>1?"tie":"takes it"}! +${RR.winMove}</h2>
         ${ev.length?`<div class="events">${ev.map(e=>`${e.sp.icon} ${esc(nameOf(e.id))} hit <b>${esc(e.sp.label)}</b> (${e.sp.move>0?"+":""}${e.sp.move})`).join("<br>")}</div>`:""}
-        ${(B.lapEvents[m.round]||[]).length?`<p class="display" style="font-size:22px;margin-top:10px">👑 ${(B.lapEvents[m.round]).map(nameOf).map(esc).join(" & ")} crossed the crown! Another lap!</p>`:""}</div>
+        ${(B.lapEvents[m.round]||[]).length?`<p class="display" style="font-size:22px;margin-top:10px">👑 ${(B.lapEvents[m.round]).map(nameOf).map(esc).join(" & ")} crossed the finish line! Another lap!</p>`:""}</div>
         <div class="card"><h3>All guesses</h3>${rows.map(([id,a])=>`<div class="chip" style="margin:6px 0;width:100%;padding:8px 12px;border-radius:12px;font-size:16px;${ws.includes(id)?"background:#fff3c4":""}">
           ${ws.includes(id)?"👑":""} ${esc(nameOf(id))}<span style="margin-left:auto">${esc(a.n)} (${Math.abs(a.n-secret)===0?"exact!":"off by "+Math.abs(a.n-secret)})</span></div>`).join("")}</div>`;
     }
@@ -466,7 +467,7 @@ function phaseView(m, B, isJudge){
       ${win?answerCard(pick,win,{win:true}):""}
       <p class="muted">Everyone else who answered moves +${PLAY_MOVE}.</p>
       ${ev.length?`<div class="events">${ev.map(e=>`${e.sp.icon} ${esc(nameOf(e.id))} hit <b>${esc(e.sp.label)}</b> (${e.sp.move>0?"+":""}${e.sp.move})`).join("<br>")}</div>`:""}
-      ${(B.lapEvents[m.round]||[]).length?`<p class="display" style="font-size:22px;margin-top:10px">👑 ${(B.lapEvents[m.round]).map(nameOf).map(esc).join(" & ")} crossed the crown! Another lap!</p>`:""}
+      ${(B.lapEvents[m.round]||[]).length?`<p class="display" style="font-size:22px;margin-top:10px">👑 ${(B.lapEvents[m.round]).map(nameOf).map(esc).join(" & ")} crossed the finish line! Another lap!</p>`:""}
       </div>
       ${ROUNDS[m.round].type==="wheel" ? `<p class="display" style="font-size:22px">🥃 ${esc(nameOf(pick))}, time for a shot with ${esc(nameOf(judgeId()))}!</p>` : ""}
       ${["challenge","wheel"].includes(ROUNDS[m.round].type) ? "" : `<div class="card"><h3>All answers</h3>${list.filter(([id])=>id!==pick).map(([id,a])=>answerCard(id,a,{by:m.revealAll?nameOf(id):""})).join("")||"<p class='muted'>Just the one!</p>"}</div>`}`;
@@ -478,7 +479,7 @@ function phaseView(m, B, isJudge){
       <p class="muted">Happy 29th, Madi! 🎂</p></div>
       <div class="card">${st.map((id,i)=>`<div class="chip" style="margin:6px 0;width:100%;padding:8px 12px;border-radius:12px;font-size:16px">
         ${medal[i]||(i+1)+"."} <div class="tok" style="background:${colorOf(id)}">${esc(nameOf(id)[0])}</div> ${esc(nameOf(id))}
-        <span style="margin-left:auto">${B.pos[id]} spaces${B.laps[id]?` (👑${B.laps[id]>1?"×"+B.laps[id]:""})`:""} · ${B.wins[id]} win${B.wins[id]===1?"":"s"}</span></div>`).join("")}</div>`;
+        <span style="margin-left:auto">${B.pos[id]} spaces${B.laps[id]?` (🏁${B.laps[id]>1?"×"+B.laps[id]:""})`:""} · ${B.wins[id]} win${B.wins[id]===1?"":"s"}</span></div>`).join("")}</div>`;
   }
   return "";
 }
@@ -634,7 +635,7 @@ function finishSpin(){
 }
 
 function gifForm(){
-  if(!ui.gifResults && !ui.gifSearching && !ui.gifAuto){ ui.gifAuto = true; setTimeout(()=>doGifSearch("happy birthday"),0); }
+  if(!ui.gifResults && !ui.gifSearching && !ui.gifAuto){ ui.gifAuto = true; setTimeout(()=>doGifSearch(ROUNDS[meta().round].query || "happy birthday"),0); }
   let res = "";
   if(!GIPHY_KEY) res = `<p class="muted center">GIF search needs a GIPHY key in the file.</p>`;
   else if(ui.gifSearching) res = `<p class="muted center">Searching...</p>`;
