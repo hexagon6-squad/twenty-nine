@@ -23,19 +23,21 @@ const FIREBASE_CONFIG = {
   messagingSenderId: "333897369540",
   appId: "1:333897369540:web:39156ec0a0216e7aa98691"
 };
-const GAME_ID = "madi29"; // change to start a totally fresh game
+const GAME_ID = "madi29";
+// Free key from developers.giphy.com (needed for the GIF round)
+const GIPHY_KEY = "oq8nAUSzFoHRX6Oy6D8VdSQVKg1oyHx1";
 
 // The 10 rounds. Edit freely. type: "text" or "song". oneWord forces a single word.
 const ROUNDS = [
   { prompt: "Describe Madi in one word", type: "text", oneWord: true, max: 24 },
-  { prompt: "Pick a song that describes Madi", type: "song" },
-  { prompt: "Write the newspaper headline for Madi's 29th", type: "text", max: 90 },
-  { prompt: "Your favorite Madi memory, in one sentence", type: "text", max: 160 },
   { prompt: "The song that should play when Madi walks into a room", type: "song" },
-  { prompt: "If Madi were a brunch item, what would she be?", type: "text", max: 60 },
+  { prompt: "Pick a GIF to tell Madi happy birthday", type: "gif" },
+  { prompt: "Give Madi a new middle name: Madi ____ Barros", type: "text", max: 30, format: "Madi {} Barros", placeholder: "New middle name" },
+  { prompt: "First to give Madi a high five wins! 🖐️", type: "challenge" },
   { prompt: "What's Madi's secret superpower?", type: "text", max: 90 },
-  { prompt: "What will Madi be doing at 39?", type: "text", max: 120 },
-  { prompt: "The ultimate Madi road trip song", type: "song" },
+  { prompt: "Spin the wheel! Whoever it lands on takes a shot with Madi 🥃", type: "wheel" },
+  { prompt: "Guess Madi's secret number from 1 to 100! Closest wins", type: "number", winMove: 10, exactBonus: 5 },
+  { prompt: "Describe Madi's favorite day in 3 words", type: "text", max: 50, maxWords: 3, placeholder: "Three words" },
   { prompt: "Final round: a one-sentence birthday toast to Madi", type: "text", max: 160 }
 ];
 
@@ -45,15 +47,15 @@ const FINISH = 29;    // cross space 29 (the crown) to win
 
 // Special spaces: index -> { icon, label, move }
 const SPECIALS = {
-  3:  { icon: "🥂", label: "Mimosa refill", move: 1 },
-  6:  { icon: "⏳", label: "Waiting for a table", move: -1 },
-  9:  { icon: "⚽", label: "Timbers goal!", move: 2 },
-  12: { icon: "🧇", label: "Bottomless waffles", move: 1 },
-  15: { icon: "🌺", label: "Honolulu getaway", move: 3 },
+  3:  { icon: "🥂", label: "Mimosa refill", move: 2 },
+  6:  { icon: "🤕", label: "Hangover day", move: -1 },
+  9:  { icon: "⚽", label: "Timbers win!", move: 3 },
+  12: { icon: "🌮", label: "Taco Bell boost", move: 2 },
+  15: { icon: "🍸", label: "Dirty Martini boost", move: 2 },
   18: { icon: "💸", label: "You got the brunch bill", move: -3 },
-  21: { icon: "📸", label: "Selfie with Madi", move: 1 },
-  24: { icon: "🍳", label: "Dropped your eggs", move: -1 },
-  26: { icon: "🎂", label: "Extra cake slice", move: 2 }
+  21: { icon: "⭐", label: "Madi's fav number boost", move: 2 },
+  24: { icon: "🙃", label: "You fell off a counter", move: -2 },
+  26: { icon: "☕", label: "Espresso Martini boost", move: 2 }
 };
 </script>
 <style>
@@ -119,6 +121,14 @@ input:focus{outline:none;border-color:var(--purple)}
 .song .a{font-size:13px;font-weight:700;opacity:.7}
 .song .play{margin-left:auto;flex:none;width:42px;height:42px;border-radius:50%;border:3px solid var(--line);background:var(--teal);color:#fff;font-size:16px;cursor:pointer}
 .results .ans{cursor:pointer}
+.gifgrid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}
+.gifgrid img{width:100%;aspect-ratio:1/1;object-fit:cover;border-radius:10px;border:3px solid var(--line);cursor:pointer;background:#f3ecff;display:block}
+.ans img.gif{width:100%;max-height:320px;object-fit:contain;border-radius:10px;display:block;background:#f3ecff}
+.wheelwrap{position:relative;width:min(300px,80vw);margin:6px auto 0}
+.wheelwrap svg{width:100%;height:auto;display:block;filter:drop-shadow(0 5px 0 var(--line))}
+.wheelwrap .ptr{position:absolute;left:50%;top:-6px;transform:translateX(-50%);font-size:30px;z-index:2;line-height:1}
+#wheel{transform-origin:50% 50%}
+.giphy{font-size:10px;font-weight:900;letter-spacing:1px;opacity:.5;text-align:right;margin-top:6px}
 .events{font-weight:800;font-size:14px;line-height:1.6}
 .hostbar{position:fixed;left:0;right:0;bottom:0;background:var(--ink);color:#fff;padding:10px 12px calc(10px + env(safe-area-inset-bottom));z-index:10}
 .hostbar .inner{max-width:560px;margin:0 auto}
@@ -203,19 +213,24 @@ const answersFor = r => (S.answers && S.answers["r"+r]) || {};
 
 /* Board movement is derived from answers + picks, so it can never drift. */
 function computeBoard(){
-  const pos = {}, wins = {}, crossedAt = {}, events = {};
+  const pos = {}, wins = {}, crossedAt = {}, events = {}, lastHit = {};
   racers().forEach(([id])=>{ pos[id]=0; wins[id]=0; });
   for(let r=0;r<ROUNDS.length;r++){
     const pick = S.picks && S.picks["r"+r];
     if(!pick) continue;
-    const ev = events[r] = [];
+    const ev = events[r] = [], winners = [].concat(pick), RR = ROUNDS[r] || {};
+    const secret = S.secrets && S.secrets["r"+r];
     for(const id of Object.keys(answersFor(r))){
       if(!(id in pos) || crossedAt[id]!==undefined) continue;
-      const step = id===pick ? WIN_MOVE : PLAY_MOVE;
-      if(id===pick) wins[id]++;
+      const won = winners.includes(id);
+      let step = won ? (RR.winMove || WIN_MOVE) : PLAY_MOVE;
+      if(won && RR.exactBonus && secret!=null && answersFor(r)[id].n === secret){ step += RR.exactBonus; ev.push({id, sp:{icon:"🎯", label:"Exact number bonus", move:RR.exactBonus}}); }
+      if(won) wins[id]++;
       let p = pos[id] + step;
       const sp = SPECIALS[p];
-      if(sp && p < FINISH){ p = Math.max(0, p + sp.move); ev.push({id, sp}); }
+      // a setback can't hit the same player twice in a row (stops -2 spaces from looping +2 movers forever)
+      if(sp && p < FINISH && !(sp.move < 0 && lastHit[id] === p)){ lastHit[id] = sp.move < 0 ? p : null; p = Math.max(0, p + sp.move); ev.push({id, sp}); }
+      else lastHit[id] = null;
       pos[id] = p;
       if(p >= FINISH && crossedAt[id]===undefined) crossedAt[id] = r;
     }
@@ -310,6 +325,7 @@ function render(){
 
   $("#main").innerHTML = joined ? phaseView(m, B, isJudge) : joinView();
   wire();
+  runWheel();
   renderHost(m, B);
 }
 
@@ -322,11 +338,21 @@ function joinView(){
 function answerCard(id, a, opts={}){
   const cls = ["ans"]; if(opts.pickable) cls.push("pickable"); if(opts.sel) cls.push("sel"); if(opts.win) cls.push("win");
   let body;
-  if(a.type==="song"){
+  if(a.type==="number"){
+    body = `<div class="txt">🔢 ${esc(a.n)}</div>`;
+  } else if(a.type==="challenge"||a.type==="wheel"){
+    body = `<div class="txt">🖐️ ${esc(a.text)}</div>`;
+  } else if(a.type==="gif"){
+    body = `<img class="gif" src="${esc(a.url)}" alt="${esc(a.title||"GIF")}">`;
+  } else if(a.type==="song"){
     body = `<div class="song">${a.art?`<img src="${esc(a.art)}" alt="">`:`<div style="width:56px;height:56px;border-radius:8px;border:2px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:26px;flex:none;background:#f3ecff">🎵</div>`}<div><div class="t">${esc(a.title)}</div><div class="a">${esc(a.artist||"")}</div>
       ${a.url?`<a href="${esc(a.url)}" target="_blank" rel="noopener" class="a" style="color:var(--purple)">Open in Apple Music</a>`:""}</div>
       ${a.preview?`<button class="play" data-play="${esc(a.preview)}">▶</button>`:""}</div>`;
-  } else body = `<div class="txt">${esc(a.text)}</div>`;
+  } else {
+    const fmt = (ROUNDS[meta().round]||{}).format;
+    body = fmt ? `<div class="txt">${esc(fmt).replace("{}", `<span style="color:var(--red)">${esc(a.text)}</span>`)}</div>`
+               : `<div class="txt">${esc(a.text)}</div>`;
+  }
   return `<div class="${cls.join(" ")}" ${opts.pickable?`data-pick="${id}"`:""}>${opts.win?"<div style='font-size:22px'>👑</div>":""}${body}${opts.by?`<div class="by">${esc(opts.by)}</div>`:""}</div>`;
 }
 function shuffled(r){ return Object.entries(answersFor(r)).sort((a,b)=>hash(a[0]+r+GAME_ID)-hash(b[0]+r+GAME_ID)); }
@@ -339,23 +365,52 @@ function phaseView(m, B, isJudge){
       <p class="muted">${ROUNDS.length} rounds. Madi picks her favorite answer each round. Her pick moves <b>+${WIN_MOVE}</b>, everyone else who answers moves <b>+${PLAY_MOVE}</b>. First to cross the 👑 wins.</p></div>`;
   }
   if(m.phase==="submit"){
+    if(R.type==="wheel") return wheelView(m, isJudge);
+    if(R.type==="number"){
+      const secret = S.secrets && S.secrets["r"+m.round];
+      if(isJudge) return secret!=null && !ui.editing
+        ? `<div class="card center"><h2>Your secret number: ${esc(secret)} 🤫</h2><p>${nIn} of ${nTotal} have guessed.</p><button class="btn ghost small" data-act="edit">Change it</button></div>`
+        : `<div class="card"><h2>Pick your secret number 🤫</h2><p class="muted">1 to 100. Nobody sees it until the reveal.</p>
+          <input id="numIn" type="number" inputmode="numeric" min="1" max="100" placeholder="1-100"><button class="btn red" data-act="setSecret">Lock it in</button></div>`;
+      if(mine && !ui.editing) return `<div class="card center"><h2>Your guess: ${esc(mine.n)} ✓</h2><p class="muted">${nIn} of ${nTotal} guessed. Closest to Madi's number wins +${R.winMove}. Nail it exactly for +${R.exactBonus} more!</p>
+        <button class="btn ghost small" data-act="edit">Change my guess</button></div>`;
+      return `<div class="card"><h2>${esc(R.prompt)}</h2><p class="muted">Closest wins <b>+${R.winMove}</b>. Exactly right gets <b>+${R.exactBonus} bonus</b>. Everyone else moves +${PLAY_MOVE}.</p>
+        <input id="numIn" type="number" inputmode="numeric" min="1" max="100" placeholder="1-100"><button class="btn red" data-act="submitNum">Submit guess</button></div>`;
+    }
+    if(R.type==="challenge"){
+      if(isJudge) return `<div class="card center"><div class="big">🖐️</div><h2>Hands up, Madi!</h2><p>Everyone is racing to high five you. Remember who gets you first, you'll crown them next.</p></div>`;
+      return `<div class="card center"><div class="big">🖐️</div><h2>GO GO GO!</h2><p style="font-weight:800;font-size:18px">First to high five Madi wins +${WIN_MOVE}.</p><p class="muted">Everyone else still moves +${PLAY_MOVE}.</p></div>`;
+    }
     if(isJudge) return `<div class="card center"><h2>Sit tight, birthday girl 👑</h2><p>Your friends are answering:</p><p class="display big">${nIn} / ${nTotal}</p></div>`;
     if(mine && !ui.editing) return `<div class="card center"><h2>Locked in ✓</h2>${answerCard(ME,mine)}<p class="muted">${nIn} of ${nTotal} answered. Answers stay anonymous.</p>
       <button class="btn ghost small" data-act="edit">Change my answer</button></div>`;
     if(R.type==="song") return songForm();
-    return `<div class="card"><h2>${esc(R.prompt)}</h2><p class="muted">${R.oneWord?"One word only.":"Keep it short and sweet."} Madi won't see who wrote it.</p>
-      <input id="txtIn" maxlength="${R.max||120}" placeholder="${R.oneWord?"One word":"Type your answer"}" autocomplete="off" value="${mine&&mine.text?esc(mine.text):""}">
+    if(R.type==="gif") return gifForm();
+    return `<div class="card"><h2>${esc(R.prompt)}</h2><p class="muted">${R.oneWord?"One word only.":R.maxWords?`${R.maxWords} words only.`:"Keep it short and sweet."} Madi won't see who wrote it.</p>
+      <input id="txtIn" maxlength="${R.max||120}" placeholder="${R.placeholder||(R.oneWord?"One word":"Type your answer")}" autocomplete="off" value="${mine&&mine.text?esc(mine.text):""}">
       <button class="btn red" data-act="submitText">Submit</button></div>`;
   }
   if(m.phase==="judge"){
     const list = shuffled(m.round);
-    if(isJudge) return `<div class="card"><h2>Pick your favorite 👑</h2><p class="muted">Tap one, then crown it. Your pick moves +${WIN_MOVE}.</p>
+    const ch = R.type==="challenge";
+    if(isJudge) return `<div class="card"><h2>${ch?"Who high fived you first? 🖐️":"Pick your favorite 👑"}</h2><p class="muted">Tap one, then crown it. Your pick moves +${WIN_MOVE}.</p>
       ${list.map(([id,a])=>answerCard(id,a,{pickable:true,sel:ui.selected===id})).join("")}
       <button class="btn red" data-act="crown" ${ui.selected?"":"disabled"}>Crown it 👑</button></div>`;
-    return `<div class="card"><h2>${esc(nameOf(judgeId()))} is choosing...</h2>${list.map(([id,a])=>answerCard(id,a,{})).join("")}</div>`;
+    return `<div class="card"><h2>${esc(nameOf(judgeId()))} is ${ch?"deciding who was first...":"choosing..."}</h2>${list.map(([id,a])=>answerCard(id,a,{})).join("")}</div>`;
   }
   if(m.phase==="reveal"){
     const pick = S.picks?.["r"+m.round], list = shuffled(m.round), ev = B.events[m.round]||[];
+    const RR = ROUNDS[m.round];
+    if(RR.type==="number"){
+      const secret = S.secrets && S.secrets["r"+m.round], ws = [].concat(pick);
+      const rows = Object.entries(answersFor(m.round)).sort((a,b)=>Math.abs(a[1].n-secret)-Math.abs(b[1].n-secret));
+      return `<div class="card center"><p class="muted" style="margin:0">Madi's secret number was</p><div class="display" style="font-size:64px;color:var(--red)">${esc(secret)}</div>
+        <h2>${ws.map(nameOf).map(esc).join(" & ")} ${ws.length>1?"tie":"takes it"}! +${RR.winMove}</h2>
+        ${ev.length?`<div class="events">${ev.map(e=>`${e.sp.icon} ${esc(nameOf(e.id))} hit <b>${esc(e.sp.label)}</b> (${e.sp.move>0?"+":""}${e.sp.move})`).join("<br>")}</div>`:""}
+        ${Object.keys(B.crossedAt).length?`<p class="display" style="font-size:22px;margin-top:10px">👑 ${Object.keys(B.crossedAt).map(nameOf).map(esc).join(" & ")} crossed the crown!</p>`:""}</div>
+        <div class="card"><h3>All guesses</h3>${rows.map(([id,a])=>`<div class="chip" style="margin:6px 0;width:100%;padding:8px 12px;border-radius:12px;font-size:16px;${ws.includes(id)?"background:#fff3c4":""}">
+          ${ws.includes(id)?"👑":""} ${esc(nameOf(id))}<span style="margin-left:auto">${esc(a.n)} (${Math.abs(a.n-secret)===0?"exact!":"off by "+Math.abs(a.n-secret)})</span></div>`).join("")}</div>`;
+    }
     const win = answersFor(m.round)[pick];
     return `<div class="card center"><h2>${esc(nameOf(pick))} takes it! +${WIN_MOVE}</h2>
       ${win?answerCard(pick,win,{win:true}):""}
@@ -363,7 +418,8 @@ function phaseView(m, B, isJudge){
       ${ev.length?`<div class="events">${ev.map(e=>`${e.sp.icon} ${esc(nameOf(e.id))} hit <b>${esc(e.sp.label)}</b> (${e.sp.move>0?"+":""}${e.sp.move})`).join("<br>")}</div>`:""}
       ${Object.keys(B.crossedAt).length?`<p class="display" style="font-size:22px;margin-top:10px">👑 ${Object.keys(B.crossedAt).map(nameOf).map(esc).join(" & ")} crossed the crown!</p>`:""}
       </div>
-      <div class="card"><h3>All answers</h3>${list.filter(([id])=>id!==pick).map(([id,a])=>answerCard(id,a,{by:m.revealAll?nameOf(id):""})).join("")||"<p class='muted'>Just the one!</p>"}</div>`;
+      ${ROUNDS[m.round].type==="wheel" ? `<p class="display" style="font-size:22px">🥃 ${esc(nameOf(pick))}, time for a shot with ${esc(nameOf(judgeId()))}!</p>` : ""}
+      ${["challenge","wheel"].includes(ROUNDS[m.round].type) ? "" : `<div class="card"><h3>All answers</h3>${list.filter(([id])=>id!==pick).map(([id,a])=>answerCard(id,a,{by:m.revealAll?nameOf(id):""})).join("")||"<p class='muted'>Just the one!</p>"}</div>`}`;
   }
   if(m.phase==="final"){
     const st = standings(B), medal = ["🥇","🥈","🥉"];
@@ -375,6 +431,92 @@ function phaseView(m, B, isJudge){
         <span style="margin-left:auto">space ${Math.min(B.pos[id],FINISH)} · ${B.wins[id]} win${B.wins[id]===1?"":"s"}</span></div>`).join("")}</div>`;
   }
   return "";
+}
+
+function wheelSVG(list){
+  const n = Math.max(list.length,1), c = 150, r = 146, sl = 360/n, rad = d => d*Math.PI/180;
+  const pt = (d,rr) => [c + rr*Math.sin(rad(d)), c - rr*Math.cos(rad(d))];
+  let g = "";
+  list.forEach(([id,p],i)=>{
+    const a0 = i*sl, a1 = (i+1)*sl, [x0,y0] = pt(a0,r), [x1,y1] = pt(a1,r), big = sl>180?1:0, mid = a0+sl/2;
+    const shape = n===1 ? `<circle cx="${c}" cy="${c}" r="${r}" fill="${colorOf(id)}"/>`
+      : `<path d="M${c},${c} L${x0},${y0} A${r},${r} 0 ${big} 1 ${x1},${y1} Z" fill="${colorOf(id)}" stroke="#2a1f3d" stroke-width="3"/>`;
+    const fs = n<=4?20:n<=7?16:13, nm = (p.name||"?").slice(0,9);
+    g += shape + `<text x="${c}" y="${c-r*0.6}" transform="rotate(${mid},${c},${c})" text-anchor="middle" dominant-baseline="middle"
+      font-family="Lilita One, sans-serif" font-size="${fs}" fill="#fff" stroke="#2a1f3d" stroke-width="3" paint-order="stroke">${esc(nm)}</text>`;
+  });
+  return `<svg viewBox="0 0 300 300"><g id="wheel">${g}</g><circle cx="${c}" cy="${c}" r="${r}" fill="none" stroke="#2a1f3d" stroke-width="5"/>
+    <circle cx="${c}" cy="${c}" r="20" fill="#ffc83d" stroke="#2a1f3d" stroke-width="4"/><text x="${c}" y="${c+1}" text-anchor="middle" dominant-baseline="middle" font-size="18">🥃</text></svg>`;
+}
+function wheelView(m, isJudge){
+  const spin = S.spins && S.spins["r"+m.round];
+  const list = spin && spin.order ? spin.order.filter(id=>players()[id]).map(id=>[id,players()[id]]) : racers();
+  const canSpin = (isJudge || IS_HOST) && !spin;
+  let status;
+  if(!spin) status = isJudge ? `<p style="font-weight:800">Tap spin, birthday girl!</p>` : `<p class="muted">Waiting for ${esc(nameOf(judgeId()))} to spin...</p>`;
+  else status = `<p class="display" style="font-size:20px" id="wheelMsg">Spinning...</p>`;
+  return `<div class="card center"><h2>Spin the wheel! 🥃</h2><p class="muted">Whoever it lands on takes a shot with Madi and wins +${WIN_MOVE}. Everyone else moves +${PLAY_MOVE}.</p>
+    <div class="wheelwrap"><div class="ptr">🔻</div>${wheelSVG(list)}</div>${status}
+    ${canSpin?`<button class="btn red" data-act="spin">Spin! 🎡</button>`:""}</div>`;
+}
+// Animate the wheel to the shared result. Every phone uses the same stored angle, so they all land on the same name.
+const SPIN_MS = 10000; // how long the wheel spins
+function runWheel(){
+  const m = meta(), R = ROUNDS[m.round], el = document.getElementById("wheel");
+  if(!el || m.phase!=="submit" || R.type!=="wheel") return;
+  const spin = S.spins && S.spins["r"+m.round]; if(!spin) return;
+  const msg = document.getElementById("wheelMsg");
+  const done = () => { const mm = document.getElementById("wheelMsg"); if(mm) mm.textContent = "🥃 " + nameOf(spin.winner) + "!"; };
+  // Everyone finishes at the same moment: SPIN_MS after the spin was saved.
+  const key = m.round+":"+spin.at;
+  if(ui.wheelKey !== key){ ui.wheelKey = key; ui.wheelEnd = Date.now() + Math.min(SPIN_MS, Math.max(0, spin.at + SPIN_MS - Date.now())); }
+  const left = ui.wheelEnd - Date.now();
+  if(left <= 200){ el.style.transform = `rotate(${spin.rot}deg)`; done(); return; }
+  // ease-out from a fresh start each render so re-renders never jump
+  const total = SPIN_MS, elapsed = total - left;
+  const ease = t => 1 - Math.pow(1 - t, 3);
+  const now = spin.rot * ease(Math.min(1, elapsed/total));
+  el.style.transform = `rotate(${now}deg)`;
+  cancelAnimationFrame(ui.wheelRAF);
+  const tick = () => {
+    const l = ui.wheelEnd - Date.now(), e2 = document.getElementById("wheel"); if(!e2) return;
+    if(l <= 0){ e2.style.transform = `rotate(${spin.rot}deg)`; done(); return; }
+    e2.style.transform = `rotate(${spin.rot * ease((total - l)/total)}deg)`;
+    ui.wheelRAF = requestAnimationFrame(tick);
+  };
+  ui.wheelRAF = requestAnimationFrame(tick);
+}
+function finishSpin(){
+  const m = meta(), spin = S.spins && S.spins["r"+m.round];
+  if(!spin || m.phase!=="submit" || ROUNDS[m.round].type!=="wheel") return;
+  const map = { [`picks/r${m.round}`]: spin.winner, "meta/phase":"reveal" };
+  (spin.order||[]).forEach(id=>{ if(players()[id]) map[`answers/r${m.round}/${id}`] = { type:"wheel", text:nameOf(id) }; });
+  store.update(map);
+}
+
+function gifForm(){
+  if(!ui.gifResults && !ui.gifSearching && !ui.gifAuto){ ui.gifAuto = true; setTimeout(()=>doGifSearch("happy birthday"),0); }
+  let res = "";
+  if(!GIPHY_KEY) res = `<p class="muted center">GIF search needs a GIPHY key in the file.</p>`;
+  else if(ui.gifSearching) res = `<p class="muted center">Searching...</p>`;
+  else if(ui.gifResults) res = ui.gifResults.length
+    ? `<div class="gifgrid">${ui.gifResults.map((g,i)=>`<img data-gif="${i}" src="${esc(g.thumb)}" alt="${esc(g.title)}" loading="lazy">`).join("")}</div><div class="giphy">POWERED BY GIPHY</div>`
+    : `<p class="muted center">No GIFs found. Try different words.</p>`;
+  return `<div class="card"><h2>${esc(ROUNDS[meta().round].prompt)}</h2><p class="muted">Search GIPHY and tap your pick.</p>
+    <div style="display:flex;gap:8px"><input id="gifQ" placeholder="happy birthday, cake, dance..." autocomplete="off" value="${esc(ui.gifQ||"")}">
+    <button class="btn small teal" style="margin:0" data-act="gifSearch">🔎</button></div>${res}</div>`;
+}
+async function doGifSearch(q){
+  if(!GIPHY_KEY) return;
+  ui.gifQ = q; ui.gifSearching = true; render();
+  try{
+    const r = await fetch(`https://api.giphy.com/v1/gifs/search?api_key=${GIPHY_KEY}&q=${encodeURIComponent(q)}&limit=16&rating=pg-13`);
+    const d = await r.json();
+    ui.gifResults = (d.data||[]).map(g=>({ title:g.title||"GIF",
+      thumb:(g.images.fixed_width && g.images.fixed_width.url) || g.images.original.url,
+      url:(g.images.downsized_medium && g.images.downsized_medium.url) || g.images.original.url }));
+  }catch(e){ ui.gifResults = []; }
+  ui.gifSearching = false; render();
 }
 
 function songForm(){
@@ -410,6 +552,11 @@ const mapApple = x => ({ type:"song", title:x.trackName, artist:x.artistName,
 async function searchSongs(q){
   const term = encodeURIComponent(q);
   const apple = `https://itunes.apple.com/search?term=${term}&media=music&entity=song&limit=8&country=us`;
+  // 1) Our own server helper (works on every phone when hosted on Vercel)
+  try{
+    const r = await fetch(`/api/search?q=${term}`);
+    if(r.ok){ const d = await r.json(); if(d.results) return d.results; }
+  }catch(e){}
   try{
     const r = await fetch(apple, { mode:"cors" });
     if(r.ok){ const d = await r.json(); if(d.results && d.results.length) return d.results.map(mapApple); }
@@ -431,6 +578,9 @@ function wire(){
     if(e.target.closest("[data-play],a")) return;
     const s = ui.songResults[+el.dataset.song]; submit(s); ui.songResults=null; ui.lastQ="";
   });
+  document.querySelectorAll("[data-gif]").forEach(el=>el.onclick = () => {
+    const g = ui.gifResults[+el.dataset.gif]; submit({ type:"gif", url:g.url, title:g.title });
+  });
   document.querySelectorAll("[data-play]").forEach(el=>el.onclick = e => {
     e.stopPropagation();
     const src = el.dataset.play;
@@ -440,7 +590,8 @@ function wire(){
     audio = new Audio(src); audio.play().catch(()=>{}); el.textContent="❚❚"; audio.onended=()=>{el.textContent="▶"};
   });
   const enter = (id, a) => { const el=$(id); if(el) el.onkeydown = e => { if(e.key==="Enter") act(a); }; };
-  enter("#nameIn","join"); enter("#txtIn","submitText"); enter("#songQ","search");
+  enter("#nameIn","join"); enter("#txtIn","submitText"); enter("#songQ","search"); enter("#gifQ","gifSearch");
+  const ni = $("#numIn"); if(ni) ni.onkeydown = e => { if(e.key==="Enter") act(ROUNDS[meta().round].type==="number" && ME===judgeId() ? "setSecret" : "submitNum"); };
 }
 function submit(a){ ui.editing=false; ui.manualSong=false; store.set(`answers/r${meta().round}/${ME}`, a); }
 async function act(a){
@@ -453,6 +604,7 @@ async function act(a){
   if(a==="submitText"){
     let t = $("#txtIn").value.trim(); if(!t) return;
     if(ROUNDS[m.round].oneWord) t = t.split(/\s+/)[0];
+    if(ROUNDS[m.round].maxWords) t = t.split(/\s+/).slice(0, ROUNDS[m.round].maxWords).join(" ");
     submit({ type:"text", text:t });
   }
   if(a==="search"){
@@ -463,6 +615,21 @@ async function act(a){
     }catch(e){ ui.songResults = []; ui.manualSong = true; }
     ui.searching = false; render();
   }
+  if(a==="submitNum" || a==="setSecret"){
+    const v = parseInt($("#numIn").value, 10);
+    if(!(v>=1 && v<=100)) { $("#numIn").style.borderColor = "var(--red)"; return; }
+    if(a==="setSecret"){ ui.editing = false; store.set(`secrets/r${m.round}`, v); }
+    else submit({ type:"number", n:v });
+  }
+  if(a==="spin"){
+    const list = racers(); if(!list.length) return;
+    const n = list.length, i = Math.floor(Math.random()*n), sl = 360/n;
+    const rot = 360*12 - (i+0.5)*sl + (Math.random()-0.5)*sl*0.6;
+    store.set(`spins/r${m.round}`, { winner:list[i][0], rot, order:list.map(x=>x[0]), at:Date.now() });
+    setTimeout(finishSpin, SPIN_MS + 2500);
+  }
+  if(a==="finishSpin"){ finishSpin(); }
+  if(a==="gifSearch"){ const q = $("#gifQ").value.trim(); if(q) doGifSearch(q); }
   if(a==="manual"){ ui.manualSong = true; render(); }
   if(a==="submitManual"){
     const t = $("#mTitle").value.trim(); if(!t) return;
@@ -474,9 +641,21 @@ async function act(a){
   // host actions
   if(a==="start"){
     const j = $("#judgeSel").value; if(!j) return;
-    store.update({ "meta/phase":"submit", "meta/round":0, "meta/judge":j, "meta/revealAll":false, answers:null, picks:null });
+    store.update({ "meta/phase":"submit", "meta/round":0, "meta/judge":j, "meta/revealAll":false, answers:null, picks:null, spins:null, secrets:null });
   }
-  if(a==="lock"){ store.set("meta/phase","judge"); }
+  if(a==="lock"){
+    if(ROUNDS[m.round].type==="number"){
+      const secret = S.secrets && S.secrets["r"+m.round], ans = Object.entries(answersFor(m.round));
+      if(secret==null || !ans.length) return;
+      const best = Math.min(...ans.map(([,x])=>Math.abs(x.n-secret)));
+      const ws = ans.filter(([,x])=>Math.abs(x.n-secret)===best).map(([id])=>id);
+      store.update({ [`picks/r${m.round}`]: ws.length===1 ? ws[0] : ws, "meta/phase":"reveal" });
+    } else if(ROUNDS[m.round].type==="challenge"){
+      const map = { "meta/phase":"judge" };
+      racers().forEach(([id,p])=>{ map[`answers/r${m.round}/${id}`] = { type:"challenge", text:p.name }; });
+      store.update(map);
+    } else store.set("meta/phase","judge");
+  }
   if(a==="hostPick"){ /* judge fallback handled in judge view */ }
   if(a==="revealAll"){ store.set("meta/revealAll", !m.revealAll); }
   if(a==="next"){
@@ -488,12 +667,12 @@ async function act(a){
   if(a==="reset"){
     if(!ui.confirmReset){ ui.confirmReset = true; render(); setTimeout(()=>{ui.confirmReset=false;render();},3000); return; }
     ui.confirmReset = false; ui.confettiDone = false; shown = {};
-    store.update({ meta:{ phase:"lobby", round:0 }, answers:null, picks:null });
+    store.update({ meta:{ phase:"lobby", round:0 }, answers:null, picks:null, spins:null, secrets:null });
   }
   if(a==="clearPlayers"){
     if(!ui.confirmClear){ ui.confirmClear = true; render(); setTimeout(()=>{ui.confirmClear=false;render();},3000); return; }
     ui.confirmClear = false; shown = {};
-    store.update({ meta:{ phase:"lobby", round:0 }, answers:null, picks:null, players:null });
+    store.update({ meta:{ phase:"lobby", round:0 }, answers:null, picks:null, spins:null, secrets:null, players:null });
   }
 }
 
@@ -510,8 +689,21 @@ function renderHost(m, B){
     row = `<select id="judgeSel" style="flex:2;font-size:15px;padding:8px">${ps.length?"":"<option value=''>No players yet</option>"}${ps.map(([id,p])=>`<option value="${id}" ${id===cur?"selected":""}>👑 ${esc(p.name)}</option>`).join("")}</select>
       <button class="btn red" data-act="start" ${ps.length<2?"disabled":""}>Start game</button>`;
   } else if(m.phase==="submit"){
-    lbl = `Round ${m.round+1} · ${nIn}/${racers().length} answered`;
-    row = `<button class="btn red" data-act="lock" ${nIn?"":"disabled"}>Lock answers → Madi picks</button>`;
+    if(ROUNDS[m.round].type==="number"){
+      const secret = S.secrets && S.secrets["r"+m.round];
+      lbl = `Round ${m.round+1} · ${nIn}/${racers().length} guessed · ${secret!=null?"Madi's number is in ✓":"waiting on Madi's number"}`;
+      row = `<button class="btn red" data-act="lock" ${nIn && secret!=null?"":"disabled"}>Lock guesses → reveal</button>`;
+    } else if(ROUNDS[m.round].type==="wheel"){
+      const spun = S.spins && S.spins["r"+m.round];
+      lbl = `Round ${m.round+1} · spin the wheel`;
+      row = spun ? `<button class="btn red" data-act="finishSpin">Show result →</button>` : `<button class="btn ghost" data-act="spin">Spin for Madi 🎡</button>`;
+    } else if(ROUNDS[m.round].type==="challenge"){
+      lbl = `Round ${m.round+1} · high five race!`;
+      row = `<button class="btn red" data-act="lock">High five done → Madi picks</button>`;
+    } else {
+      lbl = `Round ${m.round+1} · ${nIn}/${racers().length} answered`;
+      row = `<button class="btn red" data-act="lock" ${nIn?"":"disabled"}>Lock answers → Madi picks</button>`;
+    }
   } else if(m.phase==="judge"){
     lbl = `Round ${m.round+1} · waiting for ${esc(nameOf(judgeId()))} to pick`;
     row = `<button class="btn ghost" data-act="back">Reopen answers</button>`;
@@ -548,12 +740,12 @@ let lastPhaseKey = "";
 function onState(s){
   S = s || {};
   const k = meta().phase + meta().round;
-  if(k!==lastPhaseKey){ ui.selected=null; ui.editing=false; ui.songResults=null; ui.manualSong=false; if(meta().phase!=="final") ui.confettiDone=false; lastPhaseKey=k; }
+  if(k!==lastPhaseKey){ ui.selected=null; ui.editing=false; ui.songResults=null; ui.manualSong=false; ui.gifResults=null; ui.gifAuto=false; ui.gifQ=""; if(meta().phase!=="final") ui.confettiDone=false; lastPhaseKey=k; }
   // don't wipe what someone is typing
   const active = document.activeElement;
   const typing = active && active.tagName==="INPUT" && active.id;
   const keep = typing ? { id:active.id, v:active.value, s:active.selectionStart } : null;
-  const keepVals = {}; ["mTitle","mArtist","mUrl","songQ"].forEach(id=>{ const el=document.getElementById(id); if(el) keepVals[id]=el.value; });
+  const keepVals = {}; ["mTitle","mArtist","mUrl","songQ","gifQ"].forEach(id=>{ const el=document.getElementById(id); if(el) keepVals[id]=el.value; });
   render();
   for(const id in keepVals){ const el=document.getElementById(id); if(el && !el.value) el.value = keepVals[id]; }
   if(keep){ const el=document.getElementById(keep.id); if(el){ el.value=keep.v; el.focus(); try{el.setSelectionRange(keep.s,keep.s)}catch(e){} } }
