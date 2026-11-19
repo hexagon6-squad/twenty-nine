@@ -43,7 +43,8 @@ const ROUNDS = [
 
 const WIN_MOVE = 5;   // Madi's favorite moves this many spaces
 const PLAY_MOVE = 2;  // everyone else who answered
-const FINISH = 29;    // cross space 29 (the crown) to win
+const FINISH = 29;    // the crown space; crossing it starts another lap
+const LAP = FINISH + 1; // 30 spaces around the board
 
 // Special spaces: index -> { icon, label, move }
 const SPECIALS = {
@@ -213,38 +214,38 @@ const answersFor = r => (S.answers && S.answers["r"+r]) || {};
 
 /* Board movement is derived from answers + picks, so it can never drift. */
 function computeBoard(){
-  const pos = {}, wins = {}, crossedAt = {}, events = {}, lastHit = {};
-  racers().forEach(([id])=>{ pos[id]=0; wins[id]=0; });
+  // pos is total distance travelled, so laps keep counting after the crown
+  const pos = {}, wins = {}, laps = {}, events = {}, lapEvents = {}, lastHit = {};
+  racers().forEach(([id])=>{ pos[id]=0; wins[id]=0; laps[id]=0; });
   for(let r=0;r<ROUNDS.length;r++){
     const pick = S.picks && S.picks["r"+r];
     if(!pick) continue;
-    const ev = events[r] = [], winners = [].concat(pick), RR = ROUNDS[r] || {};
+    const ev = events[r] = [], le = lapEvents[r] = [], winners = [].concat(pick), RR = ROUNDS[r] || {};
     const secret = S.secrets && S.secrets["r"+r];
     for(const id of Object.keys(answersFor(r))){
-      if(!(id in pos) || crossedAt[id]!==undefined) continue;
+      if(!(id in pos)) continue;
       const won = winners.includes(id);
       let step = won ? (RR.winMove || WIN_MOVE) : PLAY_MOVE;
       if(won && RR.exactBonus && secret!=null && answersFor(r)[id].n === secret){ step += RR.exactBonus; ev.push({id, sp:{icon:"🎯", label:"Exact number bonus", move:RR.exactBonus}}); }
       if(won) wins[id]++;
       let p = pos[id] + step;
-      const sp = SPECIALS[p];
+      const sp = SPECIALS[p % LAP];
       // a setback can't hit the same player twice in a row (stops -2 spaces from looping +2 movers forever)
-      if(sp && p < FINISH && !(sp.move < 0 && lastHit[id] === p)){ lastHit[id] = sp.move < 0 ? p : null; p = Math.max(0, p + sp.move); ev.push({id, sp}); }
+      if(sp && !(sp.move < 0 && lastHit[id] === p)){ lastHit[id] = sp.move < 0 ? p : null; p = Math.max(0, p + sp.move); ev.push({id, sp}); }
       else lastHit[id] = null;
+      const newLaps = Math.floor((p+1)/LAP);
+      if(newLaps > laps[id]) le.push(id);
+      laps[id] = Math.max(laps[id], newLaps);
       pos[id] = p;
-      if(p >= FINISH && crossedAt[id]===undefined) crossedAt[id] = r;
     }
   }
-  return { pos, wins, crossedAt, events };
+  return { pos, wins, laps, events, lapEvents };
 }
 function standings(B){
-  return racers().map(([id])=>id).sort((a,b)=>{
-    const ca = B.crossedAt[a] ?? 99, cb = B.crossedAt[b] ?? 99;
-    if(ca!==cb) return ca-cb;
-    if(B.pos[b]!==B.pos[a]) return B.pos[b]-B.pos[a];
-    return B.wins[b]-B.wins[a];
-  });
+  return racers().map(([id])=>id).sort((a,b)=> (B.pos[b]-B.pos[a]) || (B.wins[b]-B.wins[a]));
 }
+const tileOf = p => p % LAP;
+const lapTag = (B,id) => B.laps[id] ? ` · 👑${B.laps[id]>1?"×"+B.laps[id]:""}` : "";
 
 /* ================= board render + animation ================= */
 function tileCoord(i){ // 9 cols x 8 rows perimeter, 30 tiles, Start bottom-left, clockwise to the right
@@ -272,7 +273,7 @@ function buildBoard(){
 function drawTokens(){
   for(let i=0;i<=FINISH;i++){ const el=document.getElementById("t"+i); if(el) el.innerHTML=""; }
   racers().forEach(([id,p])=>{
-    const at = Math.min(FINISH, shown[id] ?? 0);
+    const at = tileOf(shown[id] ?? 0);
     const el = document.getElementById("t"+at);
     if(el) el.insertAdjacentHTML("beforeend", `<div class="tok${id===ME?" me":""}" style="background:${colorOf(id)}">${esc((p.name||"?")[0])}</div>`);
   });
@@ -289,7 +290,7 @@ function animateTo(target){
   animTimer = setInterval(()=>{
     let still = false;
     for(const id in target){
-      const t = Math.min(target[id], FINISH);
+      const t = target[id];
       if(shown[id] < t){ shown[id]++; still = true; }
       else if(shown[id] > t){ shown[id]--; still = true; }
     }
@@ -320,7 +321,7 @@ function render(){
   $("#legend").innerHTML = racers().map(([id,p])=>{
     const a = answersFor(m.round)[id];
     const done = m.phase==="submit" && a;
-    return `<div class="chip${done?" done":""}"><div class="tok" style="background:${colorOf(id)}">${esc(p.name[0])}</div>${esc(p.name)} · ${Math.min(B.pos[id]||0,FINISH)}${B.crossedAt[id]!==undefined?" 👑":""}${done?" ✓":""}</div>`;
+    return `<div class="chip${done?" done":""}"><div class="tok" style="background:${colorOf(id)}">${esc(p.name[0])}</div>${esc(p.name)} · ${tileOf(B.pos[id]||0)}${lapTag(B,id)}${done?" ✓":""}</div>`;
   }).join("") + (judgeId()&&players()[judgeId()] ? `<div class="chip">👑 ${esc(nameOf(judgeId()))} judges</div>` : "");
 
   $("#main").innerHTML = joined ? phaseView(m, B, isJudge) : joinView();
@@ -362,7 +363,7 @@ function phaseView(m, B, isJudge){
   const nIn = Object.keys(answersFor(m.round)).length, nTotal = racers().length;
   if(m.phase==="lobby"){
     return `<div class="card center"><h2>You're in!</h2><p>${Object.keys(players()).length} player(s) here. Waiting for the host to start.</p>
-      <p class="muted">${ROUNDS.length} rounds. Madi picks her favorite answer each round. Her pick moves <b>+${WIN_MOVE}</b>, everyone else who answers moves <b>+${PLAY_MOVE}</b>. First to cross the 👑 wins.</p></div>`;
+      <p class="muted">${ROUNDS.length} rounds. Madi picks her favorite answer each round. Her pick moves <b>+${WIN_MOVE}</b>, everyone else who answers moves <b>+${PLAY_MOVE}</b>. Cross the 👑 and keep going for another lap. Furthest after all ${ROUNDS.length} rounds wins!</p></div>`;
   }
   if(m.phase==="submit"){
     if(R.type==="wheel") return wheelView(m, isJudge);
@@ -407,7 +408,7 @@ function phaseView(m, B, isJudge){
       return `<div class="card center"><p class="muted" style="margin:0">Madi's secret number was</p><div class="display" style="font-size:64px;color:var(--red)">${esc(secret)}</div>
         <h2>${ws.map(nameOf).map(esc).join(" & ")} ${ws.length>1?"tie":"takes it"}! +${RR.winMove}</h2>
         ${ev.length?`<div class="events">${ev.map(e=>`${e.sp.icon} ${esc(nameOf(e.id))} hit <b>${esc(e.sp.label)}</b> (${e.sp.move>0?"+":""}${e.sp.move})`).join("<br>")}</div>`:""}
-        ${Object.keys(B.crossedAt).length?`<p class="display" style="font-size:22px;margin-top:10px">👑 ${Object.keys(B.crossedAt).map(nameOf).map(esc).join(" & ")} crossed the crown!</p>`:""}</div>
+        ${(B.lapEvents[m.round]||[]).length?`<p class="display" style="font-size:22px;margin-top:10px">👑 ${(B.lapEvents[m.round]).map(nameOf).map(esc).join(" & ")} crossed the crown! Another lap!</p>`:""}</div>
         <div class="card"><h3>All guesses</h3>${rows.map(([id,a])=>`<div class="chip" style="margin:6px 0;width:100%;padding:8px 12px;border-radius:12px;font-size:16px;${ws.includes(id)?"background:#fff3c4":""}">
           ${ws.includes(id)?"👑":""} ${esc(nameOf(id))}<span style="margin-left:auto">${esc(a.n)} (${Math.abs(a.n-secret)===0?"exact!":"off by "+Math.abs(a.n-secret)})</span></div>`).join("")}</div>`;
     }
@@ -416,7 +417,7 @@ function phaseView(m, B, isJudge){
       ${win?answerCard(pick,win,{win:true}):""}
       <p class="muted">Everyone else who answered moves +${PLAY_MOVE}.</p>
       ${ev.length?`<div class="events">${ev.map(e=>`${e.sp.icon} ${esc(nameOf(e.id))} hit <b>${esc(e.sp.label)}</b> (${e.sp.move>0?"+":""}${e.sp.move})`).join("<br>")}</div>`:""}
-      ${Object.keys(B.crossedAt).length?`<p class="display" style="font-size:22px;margin-top:10px">👑 ${Object.keys(B.crossedAt).map(nameOf).map(esc).join(" & ")} crossed the crown!</p>`:""}
+      ${(B.lapEvents[m.round]||[]).length?`<p class="display" style="font-size:22px;margin-top:10px">👑 ${(B.lapEvents[m.round]).map(nameOf).map(esc).join(" & ")} crossed the crown! Another lap!</p>`:""}
       </div>
       ${ROUNDS[m.round].type==="wheel" ? `<p class="display" style="font-size:22px">🥃 ${esc(nameOf(pick))}, time for a shot with ${esc(nameOf(judgeId()))}!</p>` : ""}
       ${["challenge","wheel"].includes(ROUNDS[m.round].type) ? "" : `<div class="card"><h3>All answers</h3>${list.filter(([id])=>id!==pick).map(([id,a])=>answerCard(id,a,{by:m.revealAll?nameOf(id):""})).join("")||"<p class='muted'>Just the one!</p>"}</div>`}`;
@@ -428,7 +429,7 @@ function phaseView(m, B, isJudge){
       <p class="muted">Happy 29th, Madi! 🎂</p></div>
       <div class="card">${st.map((id,i)=>`<div class="chip" style="margin:6px 0;width:100%;padding:8px 12px;border-radius:12px;font-size:16px">
         ${medal[i]||(i+1)+"."} <div class="tok" style="background:${colorOf(id)}">${esc(nameOf(id)[0])}</div> ${esc(nameOf(id))}
-        <span style="margin-left:auto">space ${Math.min(B.pos[id],FINISH)} · ${B.wins[id]} win${B.wins[id]===1?"":"s"}</span></div>`).join("")}</div>`;
+        <span style="margin-left:auto">${B.pos[id]} spaces${B.laps[id]?` (👑${B.laps[id]>1?"×"+B.laps[id]:""})`:""} · ${B.wins[id]} win${B.wins[id]===1?"":"s"}</span></div>`).join("")}</div>`;
   }
   return "";
 }
@@ -660,7 +661,7 @@ async function act(a){
   if(a==="revealAll"){ store.set("meta/revealAll", !m.revealAll); }
   if(a==="next"){
     const B = computeBoard();
-    if(Object.keys(B.crossedAt).length || m.round >= ROUNDS.length-1) store.set("meta/phase","final");
+    if(m.round >= ROUNDS.length-1) store.set("meta/phase","final");
     else store.update({ "meta/round": m.round+1, "meta/phase":"submit", "meta/revealAll":false });
   }
   if(a==="end"){ store.set("meta/phase","final"); }
@@ -708,7 +709,7 @@ function renderHost(m, B){
     lbl = `Round ${m.round+1} · waiting for ${esc(nameOf(judgeId()))} to pick`;
     row = `<button class="btn ghost" data-act="back">Reopen answers</button>`;
   } else if(m.phase==="reveal"){
-    const last = Object.keys(B.crossedAt).length || m.round>=ROUNDS.length-1;
+    const last = m.round>=ROUNDS.length-1;
     lbl = `Round ${m.round+1} results`;
     row = `<button class="btn ghost" data-act="revealAll">${m.revealAll?"Hide":"Show"} who wrote what</button>
       <button class="btn red" data-act="next">${last?"Final results 👑":"Next round →"}</button>`;
