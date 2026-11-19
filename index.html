@@ -37,7 +37,7 @@ const ROUNDS = [
   { prompt: "What's Madi's secret superpower?", type: "text", max: 90 },
   { prompt: "Spin the wheel! Whoever it lands on takes a shot with Madi 🥃", type: "wheel" },
   { prompt: "Guess Madi's secret number from 1 to 100! Closest wins", type: "number", winMove: 10, exactBonus: 5 },
-  { prompt: "Describe Madi's favorite day in 3 words", type: "text", max: 50, maxWords: 3, placeholder: "Three words" },
+  { prompt: "Race Madi to Taco Bell! 🌮 Beat her for +3 bonus", type: "race", bonus: 3 },
   { prompt: "Final round: a one-sentence birthday toast to Madi", type: "text", max: 160 }
 ];
 
@@ -53,12 +53,14 @@ const SPECIALS = {
   3:  { icon: "🥂", label: "Mimosa refill", move: 2 },
   6:  { icon: "🤕", label: "Hangover day", move: -1 },
   9:  { icon: "⚽", label: "Timbers win!", move: 3 },
-  12: { icon: "🌮", label: "Taco Bell boost", move: 2 },
+  12: { icon: "😱", label: "Watched a scary movie too close to bedtime", move: -2 },
   15: { icon: "🍸", label: "Dirty Martini boost", move: 2 },
-  18: { icon: "💸", label: "You got the brunch bill", move: -3 },
+  18: { icon: "✈️", label: "The FAA grounded you. Stuck 2 days in Cleveland", move: -2 },
   21: { icon: "⭐", label: "Madi's fav number boost", move: 2 },
-  24: { icon: "🙃", label: "You fell off a counter", move: -2 },
-  26: { icon: "☕", label: "Espresso Martini boost", move: 2 }
+  24: { icon: "🙃", label: "You were dancing on a counter table and fell off", move: -2 },
+  26: { icon: "☕", label: "Espresso Martini boost", move: 2 },
+  28: { icon: "💅", label: "Broken fingernail", move: -3 },
+  29: { icon: "🌮", label: "Taco Bell boost", move: 2 }
 };
 </script>
 <style>
@@ -133,6 +135,19 @@ input:focus{outline:none;border-color:var(--purple)}
 .wheelwrap svg{width:100%;height:auto;display:block;filter:drop-shadow(0 5px 0 var(--line))}
 .wheelwrap .ptr{position:absolute;left:50%;top:-6px;transform:translateX(-50%);font-size:30px;z-index:2;line-height:1}
 #wheel{transform-origin:50% 50%}
+.lanes{display:flex;flex-direction:column;gap:8px;margin:12px 0}
+.lane{position:relative;height:40px;border:3px solid var(--line);border-radius:999px;overflow:hidden;
+  background:repeating-linear-gradient(90deg,#5a5470 0 14px,#6c6684 14px 28px)}
+.lane::after{content:"";position:absolute;left:0;right:0;top:50%;border-top:2px dashed #ffe27a;opacity:.7}
+.lane.me{box-shadow:0 0 0 3px var(--yellow)}
+.lane .nm{position:absolute;left:12px;top:50%;transform:translateY(-50%);color:#fff;font-weight:900;font-size:12px;z-index:1;text-shadow:0 1px 0 #000}
+.lane .goal{position:absolute;right:4px;top:50%;transform:translateY(-50%);font-size:24px;z-index:2}
+.lane .runner{position:absolute;top:50%;transform:translate(-50%,-50%) scaleX(-1);font-size:24px;z-index:3;transition:left .15s linear}
+.tapbtn{display:block;width:100%;height:150px;font-family:"Lilita One";font-size:44px;border:4px solid var(--line);border-radius:24px;
+  background:var(--yellow);box-shadow:0 7px 0 var(--line);color:var(--ink);touch-action:manipulation;user-select:none;-webkit-user-select:none;cursor:pointer}
+.tapbtn:active{transform:translateY(5px);box-shadow:0 2px 0 var(--line)}
+.tapbtn[disabled]{opacity:.5}
+.countdown{font-family:"Lilita One";font-size:72px;color:var(--red);line-height:1;margin:6px 0}
 .giphy{font-size:10px;font-weight:900;letter-spacing:1px;opacity:.5;text-align:right;margin-top:6px}
 .events{font-weight:800;font-size:14px;line-height:1.6}
 .hostbar{position:fixed;left:0;right:0;bottom:0;background:var(--ink);color:#fff;padding:10px 12px calc(10px + env(safe-area-inset-bottom));z-index:10}
@@ -266,7 +281,7 @@ function buildBoard(){
     const [c,r] = tileCoord(i), sp = SPECIALS[i];
     let cls = "tile", ic = "", lab = "";
     if(i===0){ cls+=" start"; ic="🏁"; lab="START"; }
-    else if(i===FINISH){ cls+=" crown"; ic="👑"; lab="CROWN"; }
+    else if(i===FINISH){ cls+=" crown"; ic="🌮"; }
     else if(sp){ cls += sp.move>0?" sp-good":" sp-bad"; ic = sp.icon; }
     h += `<div class="${cls}" style="grid-column:${c};grid-row:${r}" title="${sp?esc(sp.label)+" ("+(sp.move>0?"+":"")+sp.move+")":""}">
       <div class="n">${i||""}</div><div class="ic">${ic}</div>${lab?`<div class="lab">${lab}</div>`:""}<div class="tokens" id="t${i}"></div></div>`;
@@ -328,7 +343,16 @@ function render(){
     return `<div class="chip${done?" done":""}"><div class="tok" style="background:${colorOf(id)}">${esc(p.name[0])}</div>${esc(p.name)} · ${tileOf(B.pos[id]||0)}${lapTag(B,id)}${done?" ✓":""}</div>`;
   }).join("") + (judgeId()&&players()[judgeId()] ? `<div class="chip">👑 ${esc(nameOf(judgeId()))} judges</div>` : "");
 
+  const rc = document.getElementById("raceCard");
+  const rk = m.phase==="submit" && ROUNDS[m.round] && ROUNDS[m.round].type==="race" ? (raceKey(m) || "wait") : null;
+  if(joined && rk && rc && rc.dataset.k === rk){
+    // live race: only move the runners so taps never get lost to a re-render
+    updateRace(m); renderHost(m, B);
+    if(IS_HOST && raceKey(m) && racers().length && raceField().every(([id])=>answersFor(m.round)[id])) setTimeout(finishRace, 1200);
+    return;
+  }
   $("#main").innerHTML = joined ? phaseView(m, B, isJudge) : joinView();
+  if(rk && rk!=="wait") wireRace();
   wire();
   runWheel();
   renderHost(m, B);
@@ -343,7 +367,9 @@ function joinView(){
 function answerCard(id, a, opts={}){
   const cls = ["ans"]; if(opts.pickable) cls.push("pickable"); if(opts.sel) cls.push("sel"); if(opts.win) cls.push("win");
   let body;
-  if(a.type==="number"){
+  if(a.type==="race"){
+    body = `<div class="txt">🌮 ${esc(a.text)} ${a.ms!=null?"· "+(a.ms/1000).toFixed(2)+"s":""}</div>`;
+  } else if(a.type==="number"){
     body = `<div class="txt">🔢 ${esc(a.n)}</div>`;
   } else if(a.type==="challenge"||a.type==="wheel"){
     body = `<div class="txt">🖐️ ${esc(a.text)}</div>`;
@@ -371,6 +397,7 @@ function phaseView(m, B, isJudge){
   }
   if(m.phase==="submit"){
     if(R.type==="wheel") return wheelView(m, isJudge);
+    if(R.type==="race") return raceView(m, isJudge);
     if(R.type==="number"){
       const secret = S.secrets && S.secrets["r"+m.round];
       if(isJudge) return secret!=null && !ui.editing
@@ -406,6 +433,24 @@ function phaseView(m, B, isJudge){
   if(m.phase==="reveal"){
     const pick = S.picks?.["r"+m.round], list = shuffled(m.round), ev = B.events[m.round]||[];
     const RR = ROUNDS[m.round];
+    if(RR.type==="race"){
+      const j = judgeId(), mad = answersFor(m.round)[j] || {}, ws = [].concat(pick).filter(id=>id!=="none");
+      const fmt = a => a.ms!=null ? (a.ms/1000).toFixed(2)+"s" : `${a.taps||0}/${RACE_TAPS} taps`;
+      const rows = Object.entries(answersFor(m.round)).sort((a,b)=>{
+        const x=a[1], y=b[1];
+        if(x.ms!=null && y.ms!=null) return x.ms-y.ms;
+        if(x.ms!=null) return -1; if(y.ms!=null) return 1;
+        return (y.taps||0)-(x.taps||0);
+      });
+      return `<div class="card center"><div class="big">🌮</div>
+        <p class="muted" style="margin:0">Madi's time</p><div class="display" style="font-size:44px;color:var(--red)">${fmt(mad)}</div>
+        <h2>${ws.length ? `${ws.map(nameOf).map(esc).join(" & ")} beat Madi! +${RR.bonus||3} bonus` : "Nobody beat Madi! 👑"}</h2>
+        <p class="muted">${ws.length?`Winners move +${RR.winMove||WIN_MOVE}, e`:"E"}veryone else moves +${PLAY_MOVE}.</p>
+        ${ev.length?`<div class="events">${ev.map(e=>`${e.sp.icon} ${esc(nameOf(e.id))} hit <b>${esc(e.sp.label)}</b> (${e.sp.move>0?"+":""}${e.sp.move})`).join("<br>")}</div>`:""}
+        ${(B.lapEvents[m.round]||[]).length?`<p class="display" style="font-size:22px;margin-top:10px">👑 ${(B.lapEvents[m.round]).map(nameOf).map(esc).join(" & ")} crossed the crown! Another lap!</p>`:""}</div>
+        <div class="card"><h3>Race results</h3>${rows.map(([id,a],i)=>`<div class="chip" style="margin:6px 0;width:100%;padding:8px 12px;border-radius:12px;font-size:16px;${id===j?"background:#ffe9e9":ws.includes(id)?"background:#fff3c4":""}">
+          ${i===0?"🥇":i===1?"🥈":i===2?"🥉":(i+1)+"."} ${id===j?"👑 ":""}${esc(nameOf(id))}<span style="margin-left:auto">${fmt(a)}</span></div>`).join("")}</div>`;
+    }
     if(RR.type==="number"){
       const secret = S.secrets && S.secrets["r"+m.round], ws = [].concat(pick);
       const rows = Object.entries(answersFor(m.round)).sort((a,b)=>Math.abs(a[1].n-secret)-Math.abs(b[1].n-secret));
@@ -465,7 +510,9 @@ function wheelView(m, isJudge){
     ${canSpin?`<button class="btn red" data-act="spin">Spin! 🎡</button>`:""}</div>`;
 }
 // Animate the wheel to the shared result. Every phone uses the same stored angle, so they all land on the same name.
-const SPIN_MS = 10000; // how long the wheel spins
+const SPIN_MS = 10000;
+const RACE_TAPS = 50;      // taps needed to reach Taco Bell
+const RACE_MAX_MS = 20000; // race closes 20s after GO // how long the wheel spins
 function runWheel(){
   const m = meta(), R = ROUNDS[m.round], el = document.getElementById("wheel");
   if(!el || m.phase!=="submit" || R.type!=="wheel") return;
@@ -491,6 +538,93 @@ function runWheel(){
   };
   ui.wheelRAF = requestAnimationFrame(tick);
 }
+/* ---------- Race to Taco Bell ----------
+   Each phone times its own run from its own GO, so Wi-Fi lag never decides the winner. */
+function raceKey(m){ const r = S.races && S.races["r"+m.round]; return r ? m.round+":"+r.start : null; }
+function raceSetup(m){
+  const key = raceKey(m); if(!key) return null;
+  if(!ui.race || ui.race.key !== key){
+    let go = null; try{ go = +sessionStorage.getItem("m29-race-"+key) || null; }catch(e){}
+    if(!go){ go = Date.now() + 3000; try{ sessionStorage.setItem("m29-race-"+key, go); }catch(e){} }
+    const mine = answersFor(m.round)[ME];
+    ui.race = { key, go, taps: mine ? (mine.taps||0) : ((S.raceProg && S.raceProg["r"+m.round] && S.raceProg["r"+m.round][ME]) || 0), done: !!mine, lastSent: 0, timer: null };
+  }
+  return ui.race;
+}
+function raceProgOf(m, id){
+  if(id===ME && ui.race) return ui.race.taps;
+  const a = answersFor(m.round)[id]; if(a) return a.ms!=null ? RACE_TAPS : (a.taps||0);
+  return (S.raceProg && S.raceProg["r"+m.round] && S.raceProg["r"+m.round][id]) || 0;
+}
+const raceField = () => { const j = judgeId(); return (j && players()[j] ? [[j, players()[j]]] : []).concat(racers()); };
+function lanesHTML(m){
+  return raceField().map(([id,p])=>`<div class="lane${id===ME?" me":""}" data-lane="${id}"><span class="nm">${id===judgeId()?"👑 ":""}${esc(p.name)}</span>
+    <span class="runner" style="left:${laneLeft(raceProgOf(m,id))}%">🏃</span><span class="goal">🌮</span></div>`).join("");
+}
+const laneLeft = t => 8 + Math.min(1, t/RACE_TAPS) * 80;
+function raceView(m, isJudge){
+  const started = !!raceKey(m);
+  if(!started) return `<div class="card center" id="raceCard" data-k="wait"><div class="big">🌮</div><h2>Race to Taco Bell!</h2>
+    <p>Madi races too! Tap the big button as fast as you can. ${RACE_TAPS} taps gets you there. Beat Madi's time for <b>+${(ROUNDS[m.round].bonus||3)} bonus</b> (+${PLAY_MOVE+(ROUNDS[m.round].bonus||3)} total).</p>
+    <div class="lanes">${lanesHTML(m)}</div><p class="muted">Waiting for the host to start...</p></div>`;
+  const R = raceSetup(m);
+  const tapArea = !raceField().some(([id])=>id===ME)
+    ? `<p style="font-weight:800">Cheer them on! 📣</p>`
+    : `<button class="tapbtn" id="tapBtn">TAP! 🌮</button>`;
+  return `<div class="card center" id="raceCard" data-k="${R.key}"><h2>${isJudge?"Race them to Taco Bell, Madi! 🌮":"Beat Madi to Taco Bell! 🌮"}</h2>
+    <div class="countdown" id="raceCount"></div><div class="lanes" id="lanes">${lanesHTML(m)}</div>${tapArea}
+    <p class="muted" id="raceMsg"></p></div>`;
+}
+function updateRace(m){
+  raceField().forEach(([id])=>{ const el = document.querySelector(`[data-lane="${id}"] .runner`); if(el) el.style.left = laneLeft(raceProgOf(m,id)) + "%"; });
+}
+function sendRace(final){
+  const m = meta(), R = ui.race; if(!R) return;
+  const now = Date.now();
+  if(final){
+    const ms = R.taps >= RACE_TAPS ? R.finishMs : null;
+    store.update({ [`raceProg/r${m.round}/${ME}`]: R.taps, [`answers/r${m.round}/${ME}`]: { type:"race", text:nameOf(ME), taps:R.taps, ms } });
+    return;
+  }
+  if(now - R.lastSent < 150){ if(!R.timer) R.timer = setTimeout(()=>{ R.timer=null; sendRace(false); }, 160); return; }
+  R.lastSent = now; store.set(`raceProg/r${m.round}/${ME}`, R.taps);
+}
+function raceTick(){
+  const m = meta(); if(m.phase!=="submit" || ROUNDS[m.round].type!=="race") return;
+  const R = ui.race, cd = document.getElementById("raceCount"), btn = document.getElementById("tapBtn"), msg = document.getElementById("raceMsg");
+  if(!R || !cd) return;
+  const t = Date.now() - R.go;
+  if(t < 0){ cd.textContent = Math.ceil(-t/1000); if(btn) btn.disabled = true; }
+  else if(R.done){ cd.textContent = R.finishMs!=null||R.taps>=RACE_TAPS ? "🌮!" : "⏱️"; if(btn) btn.disabled = true;
+    if(msg) msg.textContent = R.taps>=RACE_TAPS ? `You made it in ${((R.finishMs ?? (answersFor(m.round)[ME]||{}).ms ?? 0)/1000).toFixed(2)}s! Waiting for the others...` : "Time's up!"; }
+  else if(t > RACE_MAX_MS){ R.done = true; sendRace(true); }
+  else { cd.textContent = t < 800 ? "GO!" : `${Math.max(0, (RACE_MAX_MS - t)/1000).toFixed(0)}s`; if(btn) btn.disabled = false; }
+  ui.raceRAF = requestAnimationFrame(raceTick);
+}
+function wireRace(){
+  const btn = document.getElementById("tapBtn");
+  if(btn) btn.addEventListener("pointerdown", e => {
+    e.preventDefault();
+    const R = ui.race; if(!R || R.done || Date.now() < R.go) return;
+    R.taps++;
+    const el = document.querySelector(`[data-lane="${ME}"] .runner`); if(el) el.style.left = laneLeft(R.taps) + "%";
+    if(R.taps >= RACE_TAPS){ R.done = true; R.finishMs = Date.now() - R.go; sendRace(true); }
+    else sendRace(false);
+  });
+  cancelAnimationFrame(ui.raceRAF); ui.raceRAF = requestAnimationFrame(raceTick);
+}
+function finishRace(){
+  const m = meta(); if(m.phase!=="submit" || ROUNDS[m.round].type!=="race") return;
+  const ans = answersFor(m.round), map = { "meta/phase":"reveal" }, prog = (S.raceProg && S.raceProg["r"+m.round]) || {};
+  const resOf = id => { const a = ans[id] || { type:"race", text:nameOf(id), taps:prog[id]||0, ms:null }; if(!ans[id]) map[`answers/r${m.round}/${id}`] = a; return a; };
+  const j = judgeId(), mad = j ? resOf(j) : { ms:null, taps:0 };
+  // you win the round if you beat Madi: faster time, or (if nobody finished) more taps
+  const beats = a => a.ms!=null ? (mad.ms==null || a.ms < mad.ms) : (mad.ms==null && (a.taps||0) > (mad.taps||0));
+  const ws = racers().map(([id])=>[id, resOf(id)]).filter(([,a])=>beats(a)).map(([id])=>id);
+  map[`picks/r${m.round}`] = ws.length ? ws : ["none"];
+  store.update(map);
+}
+
 function finishSpin(){
   const m = meta(), spin = S.spins && S.spins["r"+m.round];
   if(!spin || m.phase!=="submit" || ROUNDS[m.round].type!=="wheel") return;
@@ -626,6 +760,8 @@ async function act(a){
     if(a==="setSecret"){ ui.editing = false; store.set(`secrets/r${m.round}`, v); }
     else submit({ type:"number", n:v });
   }
+  if(a==="startRace"){ store.set(`races/r${m.round}`, { start: Date.now() }); }
+  if(a==="finishRace"){ finishRace(); }
   if(a==="spin"){
     const list = racers(); if(!list.length) return;
     const n = list.length, i = Math.floor(Math.random()*n), sl = 360/n;
@@ -646,7 +782,7 @@ async function act(a){
   // host actions
   if(a==="start"){
     const j = $("#judgeSel").value; if(!j) return;
-    store.update({ "meta/phase":"submit", "meta/round":0, "meta/judge":j, "meta/revealAll":false, answers:null, picks:null, spins:null, secrets:null });
+    store.update({ "meta/phase":"submit", "meta/round":0, "meta/judge":j, "meta/revealAll":false, answers:null, picks:null, spins:null, secrets:null, races:null, raceProg:null });
   }
   if(a==="lock"){
     if(ROUNDS[m.round].type==="number"){
@@ -672,12 +808,12 @@ async function act(a){
   if(a==="reset"){
     if(!ui.confirmReset){ ui.confirmReset = true; render(); setTimeout(()=>{ui.confirmReset=false;render();},3000); return; }
     ui.confirmReset = false; ui.confettiDone = false; shown = {};
-    store.update({ meta:{ phase:"lobby", round:0 }, answers:null, picks:null, spins:null, secrets:null });
+    store.update({ meta:{ phase:"lobby", round:0 }, answers:null, picks:null, spins:null, secrets:null, races:null, raceProg:null });
   }
   if(a==="clearPlayers"){
     if(!ui.confirmClear){ ui.confirmClear = true; render(); setTimeout(()=>{ui.confirmClear=false;render();},3000); return; }
     ui.confirmClear = false; shown = {};
-    store.update({ meta:{ phase:"lobby", round:0 }, answers:null, picks:null, spins:null, secrets:null, players:null });
+    store.update({ meta:{ phase:"lobby", round:0 }, answers:null, picks:null, spins:null, secrets:null, races:null, raceProg:null, players:null });
   }
 }
 
@@ -694,7 +830,11 @@ function renderHost(m, B){
     row = `<select id="judgeSel" style="flex:2;font-size:15px;padding:8px">${ps.length?"":"<option value=''>No players yet</option>"}${ps.map(([id,p])=>`<option value="${id}" ${id===cur?"selected":""}>👑 ${esc(p.name)}</option>`).join("")}</select>
       <button class="btn red" data-act="start" ${ps.length<2?"disabled":""}>Start game</button>`;
   } else if(m.phase==="submit"){
-    if(ROUNDS[m.round].type==="number"){
+    if(ROUNDS[m.round].type==="race"){
+      const started = S.races && S.races["r"+m.round], doneN = raceField().filter(([id])=>answersFor(m.round)[id]).length;
+      lbl = started ? `Round ${m.round+1} · racing! ${doneN}/${raceField().length} done` : `Round ${m.round+1} · race to Taco Bell`;
+      row = started ? `<button class="btn red" data-act="finishRace">End race → results</button>` : `<button class="btn red" data-act="startRace">Start the race 🏁</button>`;
+    } else if(ROUNDS[m.round].type==="number"){
       const secret = S.secrets && S.secrets["r"+m.round];
       lbl = `Round ${m.round+1} · ${nIn}/${racers().length} guessed · ${secret!=null?"Madi's number is in ✓":"waiting on Madi's number"}`;
       row = `<button class="btn red" data-act="lock" ${nIn && secret!=null?"":"disabled"}>Lock guesses → reveal</button>`;
@@ -745,7 +885,7 @@ let lastPhaseKey = "";
 function onState(s){
   S = s || {};
   const k = meta().phase + meta().round;
-  if(k!==lastPhaseKey){ ui.selected=null; ui.editing=false; ui.songResults=null; ui.manualSong=false; ui.gifResults=null; ui.gifAuto=false; ui.gifQ=""; if(meta().phase!=="final") ui.confettiDone=false; lastPhaseKey=k; }
+  if(k!==lastPhaseKey){ ui.selected=null; ui.editing=false; ui.songResults=null; ui.manualSong=false; ui.gifResults=null; ui.gifAuto=false; ui.gifQ=""; ui.race=null; if(meta().phase!=="final") ui.confettiDone=false; lastPhaseKey=k; }
   // don't wipe what someone is typing
   const active = document.activeElement;
   const typing = active && active.tagName==="INPUT" && active.id;
